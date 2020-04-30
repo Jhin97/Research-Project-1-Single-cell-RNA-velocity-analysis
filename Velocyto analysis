@@ -1,0 +1,118 @@
+import loompy
+import numpy as np
+import pandas as pd
+import velocyto as vcy
+from sklearn.manifold import TSNE
+
+//
+ds = loompy.connect("/media/mdehsfs4/Scratch/yicheng/loom/all.loom")
+df = pd.DataFrame(ds[:, :] )
+df.columns = ds.ca["CellID"]
+df.index = ds.ra['Gene']
+ds.close()
+
+//
+samples = df.columns
+accessions = []
+for sample in samples :
+    accessions.append(sample.split(':')[0])
+    
+df.columns = accessions
+
+//
+df.to_csv('velocity.csv')
+meta = pd.read_csv('metadata.tsv', sep='\t')
+meta['Comment[ENA_RUN]']
+simplified_meta = pd.DataFrame(data={'Stage': [], 'Embryo': []})
+simplified_meta['Stage'] = meta['Characteristics[developmental stage]']
+simplified_meta['Embryo'] = meta['Source Name']
+simplified_meta.index = meta['Comment[ENA_RUN]'].tolist()
+simplified_meta.to_csv('simplified_metadata.csv')
+
+
+//
+vlm = vcy.VelocytoLoom("loom/all.loom")
+vlm.ca['CellID'] = np.array(accessions)
+
+def plot_fractions(self, save2file=None):
+        """Plots a barplot showing the abundance of spliced/unspliced molecules in the dataset
+
+        Arguments
+        ---------
+        save2file: str (default: None)
+            If not None specifies the file path to which plots get saved
+
+        Returns
+        -------
+        Nothing, it plots a barplot
+        """
+        plt.figure(figsize=(3.2, 5))
+        try:
+            chips, chip_ix = np.unique(self.ca["SampleID"], return_inverse=1)
+        except KeyError:
+            chips, chip_ix = np.unique([i.split(":")[0] for i in self.ca["CellID"]], return_inverse=1)
+        n = len(chips)
+        for i in np.unique(chip_ix):
+            tot_mol_cell_submatrixes = [X[:, chip_ix == i].sum(0) for X in [self.S, self.A, self.U]]
+            total = np.sum(tot_mol_cell_submatrixes, 0)
+            _mean = [np.mean(j / total) for j in tot_mol_cell_submatrixes]
+            _std = [np.std(j / total) for j in tot_mol_cell_submatrixes]
+            plt.ylabel("Fraction")
+            plt.bar(np.linspace(-0.2, 0.2, n)[i] + np.arange(3), _mean, 0.5 / (n * 1.05), label=chips[i])
+            plt.errorbar(np.linspace(-0.2, 0.2, n)[i] + np.arange(3), _mean, _std, c="k", fmt="none", lw=1, capsize=2)
+
+            # Hide the right and top spines
+            plt.gca().spines['right'].set_visible(False)
+            plt.gca().spines['top'].set_visible(False)
+            # Only show ticks on the left and bottom spines
+            plt.gca().yaxis.set_ticks_position('left')
+            plt.gca().xaxis.set_ticks_position('bottom')
+            plt.gca().spines['left'].set_bounds(0, 0.8)
+            # plt.legend() # REMOVED
+            
+        plt.xticks(np.arange(3), ["spliced", "ambiguous", "unspliced"])
+        plt.tight_layout()
+        if save2file:
+            plt.savefig(save2file, bbox_inches="tight")
+            
+plot_fractions(vlm)
+
+//
+vlm.normalize("S", size=True, log=True)
+vlm.filter_cells(bool_array=vlm.initial_Ucell_size > np.percentile(vlm.initial_Ucell_size, 0.5))
+meta = meta[meta['Comment[ENA_RUN]'].isin(vlm.ca['CellID'])]['Characteristics[developmental stage]']
+
+//
+vlm.ca['ClusterName'] = [int(x[-1:]) for x in meta.tolist()]
+vlm.set_clusters(vlm.ca["ClusterName"])
+vlm.cluster_labels = meta.tolist()
+
+//
+vlm.score_detection_levels(min_expr_counts=40, min_cells_express=30)
+vlm.filter_genes(by_detection_levels=True)
+vlm.score_cv_vs_mean(3000, plot=True, max_expr_avg=35)
+vlm.filter_genes(by_cv_vs_mean=True)
+vlm._normalize_S(relative_size=vlm.S.sum(0),
+             target_size=vlm.S.sum(0).mean())
+vlm._normalize_U(relative_size=vlm.U.sum(0),
+             target_size=vlm.U.sum(0).mean())
+
+//
+vlm.perform_PCA()
+vlm.knn_imputation(n_pca_dims=20, balanced=True, b_sight=500, b_maxl=1500, n_jobs=16)
+
+//
+plt.plot(np.cumsum(vlm.pca.explained_variance_ratio_)[:100])
+n_comps = np.where(np.diff(np.diff(np.cumsum(vlm.pca.explained_variance_ratio_))>0.002))[0][0]
+plt.axvline(n_comps, c="k")
+n_comps
+
+//
+vlm.fit_gammas(limit_gamma=False, fit_offset=False)
+vlm.plot_phase_portraits(["SOX1",'SOX21'])
+
+//
+vlm.predict_U()
+vlm.calculate_velocity()
+vlm.calculate_shift(assumption="constant_velocity")
+vlm.extrapolate_cell_at_t(delta_t=1.)
